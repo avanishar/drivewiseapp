@@ -3,7 +3,9 @@ import json
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join("logs", "query_logs.db")
+# Use __file__-based absolute path so logs work on any server (including Streamlit Cloud)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "logs", "query_logs.db")
 
 def init_db():
     """Initializes the SQLite database if it doesn't exist."""

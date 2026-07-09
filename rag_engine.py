@@ -7,7 +7,9 @@ import google.generativeai as genai
 # Setup Google Generative AI
 genai.configure()
 
-INDEX_PATH = os.path.join("index", "brochure_index.pkl")
+# Use __file__-based absolute paths so the app works on any server (including Streamlit Cloud)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.pkl")
 
 # Stopwords for simple keyword matching
 STOPWORDS = {

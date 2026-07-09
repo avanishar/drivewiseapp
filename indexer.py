@@ -50,7 +50,9 @@ SECTION_KEYWORDS = {
     ]
 }
 
-INDEX_PATH = os.path.join("index", "brochure_index.pkl")
+# Use __file__-based absolute paths so the app works on any server (including Streamlit Cloud)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.pkl")
 
 def get_file_hash(filepath):
     """Generates an MD5 hash of the file to check if it has changed."""
@@ -222,10 +224,12 @@ def get_chunks_from_pdf(filepath):
             
     return chunks
 
-def build_index(brochures_dir="brochures"):
+def build_index(brochures_dir=None):
     """
     Scans brochures_dir for PDFs, parses them, embeds the chunks, and updates the vector database.
     """
+    if brochures_dir is None:
+        brochures_dir = os.path.join(BASE_DIR, "brochures")
     os.makedirs(brochures_dir, exist_ok=True)
     os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
     
