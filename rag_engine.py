@@ -31,21 +31,38 @@ STOPWORDS = {
     "yourselves"
 }
 
-def load_index():
-    """Loads the brochure chunks and metadata from disk (JSON format)."""
+# In-memory index cache — loaded once per server session, never re-read from disk
+_INDEX_CACHE = None
+
+def load_index(force_reload=False):
+    """Loads the brochure index from disk into memory (cached after first load)."""
+    global _INDEX_CACHE
+    if _INDEX_CACHE is not None and not force_reload:
+        return _INDEX_CACHE
     if not os.path.exists(INDEX_PATH):
+        print(f"Index file not found at: {INDEX_PATH}")
         return None
     try:
+        print(f"Loading index from disk: {INDEX_PATH}")
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             raw = json.load(f)
         # Convert embedding lists back to numpy arrays for vector math
         for chunk in raw.get('chunks', []):
             if 'embedding' in chunk and chunk['embedding'] is not None:
                 chunk['embedding'] = np.array(chunk['embedding'], dtype=np.float32)
-        return raw
+        _INDEX_CACHE = raw
+        print(f"Index loaded: {len(raw.get('chunks', []))} chunks from {len(raw.get('files', {}))} files.")
+        return _INDEX_CACHE
     except Exception as e:
         print(f"Error loading index: {e}")
         return None
+
+def clear_index_cache():
+    """Clears the in-memory cache so the next query reloads from disk."""
+    global _INDEX_CACHE
+    _INDEX_CACHE = None
+    print("Index cache cleared.")
+
 
 def cosine_similarity(v1, v2):
     """Calculates cosine similarity between two vectors."""

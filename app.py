@@ -15,13 +15,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Pre-load the index into memory once at startup (cached for the entire server session)
+# This prevents re-reading the 13MB JSON on every query
+@st.cache_resource
+def preload_index():
+    """Load index into memory once. Cached by Streamlit for the session."""
+    return rag_engine.load_index(force_reload=True)
+
+# Trigger preload on startup
+_preloaded = preload_index()
+
 # Auto-rebuild index on first launch if no cars are found (important for cloud deployments)
 if "index_initialized" not in st.session_state:
     st.session_state["index_initialized"] = True
-    cars_check = rag_engine.get_available_cars()
-    if not cars_check:
+    if not _preloaded:
         with st.spinner("🔄 First launch: Building brochure index from pre-loaded PDFs..."):
             indexer.build_index()
+            preload_index.clear()
         st.rerun()
 
 # Custom premium styling CSS (Premium Light Theme)
@@ -233,6 +243,9 @@ with st.sidebar:
         with st.spinner("Processing brochures... (Extracting text, chunking, generating embeddings)"):
             updated = indexer.build_index()
             if updated:
+                # Clear both the module-level cache and Streamlit's cache
+                rag_engine.clear_index_cache()
+                preload_index.clear()
                 st.success("✅ Index updated successfully!")
                 st.rerun()
             else:
