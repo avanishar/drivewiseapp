@@ -1,7 +1,8 @@
 import os
-import pickle
+import json
 import time
 import hashlib
+import numpy as np
 from pypdf import PdfReader
 import google.generativeai as genai
 
@@ -52,7 +53,7 @@ SECTION_KEYWORDS = {
 
 # Use __file__-based absolute paths so the app works on any server (including Streamlit Cloud)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.pkl")
+INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.json")
 
 def get_file_hash(filepath):
     """Generates an MD5 hash of the file to check if it has changed."""
@@ -237,8 +238,13 @@ def build_index(brochures_dir=None):
     existing_index = {}
     if os.path.exists(INDEX_PATH):
         try:
-            with open(INDEX_PATH, 'rb') as f:
-                existing_index = pickle.load(f)
+            with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            # Convert embedding lists back to numpy arrays
+            for chunk in raw.get('chunks', []):
+                if 'embedding' in chunk and chunk['embedding'] is not None:
+                    chunk['embedding'] = np.array(chunk['embedding'], dtype=np.float32)
+            existing_index = raw
         except Exception as e:
             print(f"Error loading existing index, building new one: {e}")
             existing_index = {}
@@ -341,13 +347,18 @@ def build_index(brochures_dir=None):
             traceback.print_exc()
             
     if index_updated:
-        # Save updated index
-        with open(INDEX_PATH, 'wb') as f:
-            pickle.dump({
-                "files": files_metadata,
-                "chunks": all_chunks
-            }, f)
-        print("Brochure index successfully saved to disk.")
+        # Convert numpy embeddings to plain Python lists for cross-platform JSON storage
+        serializable_chunks = []
+        for chunk in all_chunks:
+            c = dict(chunk)
+            if 'embedding' in c and c['embedding'] is not None:
+                emb = c['embedding']
+                c['embedding'] = emb.tolist() if hasattr(emb, 'tolist') else list(emb)
+            serializable_chunks.append(c)
+        # Save as JSON (works on any OS / Python version)
+        with open(INDEX_PATH, 'w', encoding='utf-8') as f:
+            json.dump({"files": files_metadata, "chunks": serializable_chunks}, f)
+        print("Brochure index successfully saved to disk as JSON.")
         return True
     else:
         print("All files are up to date. Index not modified.")

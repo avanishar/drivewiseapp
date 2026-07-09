@@ -1,5 +1,5 @@
 import os
-import pickle
+import json
 import time
 import numpy as np
 import google.generativeai as genai
@@ -9,7 +9,7 @@ genai.configure()
 
 # Use __file__-based absolute paths so the app works on any server (including Streamlit Cloud)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.pkl")
+INDEX_PATH = os.path.join(BASE_DIR, "index", "brochure_index.json")
 
 # Stopwords for simple keyword matching
 STOPWORDS = {
@@ -32,12 +32,17 @@ STOPWORDS = {
 }
 
 def load_index():
-    """Loads the brochure chunks and metadata from disk."""
+    """Loads the brochure chunks and metadata from disk (JSON format)."""
     if not os.path.exists(INDEX_PATH):
         return None
     try:
-        with open(INDEX_PATH, 'rb') as f:
-            return pickle.load(f)
+        with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        # Convert embedding lists back to numpy arrays for vector math
+        for chunk in raw.get('chunks', []):
+            if 'embedding' in chunk and chunk['embedding'] is not None:
+                chunk['embedding'] = np.array(chunk['embedding'], dtype=np.float32)
+        return raw
     except Exception as e:
         print(f"Error loading index: {e}")
         return None

@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Local Databases and Indices
+# Local Databases and Indices (exclude pkl, include json)
 index/brochure_index.pkl
 logs/query_logs.db
 
