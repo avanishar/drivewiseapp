@@ -7,13 +7,25 @@ import rag_engine
 import generator
 import logger
 
-# Set page config
+# Set page config - MUST be the very first Streamlit call
 st.set_page_config(
     page_title="Drive Wise - Metadata Aware Automotive RAG",
     page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Auto-rebuild index on first launch if no cars are found (important for cloud deployments)
+# This ensures Streamlit Cloud always has a working index even if the .pkl was built on a different OS.
+if "index_initialized" not in st.session_state:
+    st.session_state["index_initialized"] = True
+    cars_check = rag_engine.get_available_cars()
+    if not cars_check:
+        with st.spinner("🔄 First launch: Building brochure index... (this takes ~2 minutes)"):
+            indexer.build_index()
+        st.success("✅ Index built successfully! Refreshing...")
+        st.rerun()
+
 
 # Custom premium styling CSS (Premium Light Theme)
 st.markdown("""
