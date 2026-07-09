@@ -91,9 +91,10 @@ def calculate_keyword_score(query, text):
             
     return matches / len(query_words)
 
-def get_available_cars():
+def get_available_cars(index_data=None):
     """Returns a list of unique brands and their models present in the index."""
-    index_data = load_index()
+    if index_data is None:
+        index_data = load_index()
     if not index_data:
         return {}
         
@@ -122,11 +123,13 @@ def get_available_cars():
         
     return cars
 
-def retrieve_chunks(query, brand, model, limit=4, target_section=None):
+def retrieve_chunks(query, brand, model, limit=4, target_section=None, index_data=None):
     """
     Retrieves and re-ranks the most relevant chunks for a specific brand and model.
+    Accepts an optional pre-loaded index_data to avoid disk reads on every call.
     """
-    index_data = load_index()
+    if index_data is None:
+        index_data = load_index()
     if not index_data:
         print("No index database found.")
         return []

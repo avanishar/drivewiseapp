@@ -95,7 +95,7 @@ def run_evaluation_and_log_async(query, brand, model, response_text, is_failed, 
         
     threading.Thread(target=run, daemon=True).start()
 
-def generate_grounded_answer(query, brand, model, target_section=None):
+def generate_grounded_answer(query, brand, model, target_section=None, index_data=None):
     """
     Retrieves relevant brochure chunks, generates a grounded response with citations,
     spawns background quality evaluation, and returns immediately.
@@ -103,7 +103,7 @@ def generate_grounded_answer(query, brand, model, target_section=None):
     start_time = time.time()
     
     # 1. Retrieve relevant chunks (includes pre-filtering and speed-optimized local sort)
-    chunks = retrieve_chunks(query, brand, model, limit=4, target_section=target_section)
+    chunks = retrieve_chunks(query, brand, model, limit=4, target_section=target_section, index_data=index_data)
     
     if not chunks:
         response_text = f"I couldn't find any brochure details for **{brand} {model}** in my index. Please make sure the brochure PDF is uploaded and processed."

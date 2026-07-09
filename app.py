@@ -194,8 +194,8 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Fetch current cars database
-cars_db = rag_engine.get_available_cars()
+# Fetch current cars database — pass cached index directly to avoid disk re-reads
+cars_db = rag_engine.get_available_cars(index_data=_preloaded)
 
 # Sidebar: Controls & Selection
 with st.sidebar:
@@ -327,13 +327,14 @@ with tab1:
                 </div>
             """, unsafe_allow_html=True)
             
-            # Generate RAG response
+            # Generate RAG response — pass cached index to avoid disk reads per query
             with st.spinner("Analyzing brochure details..."):
                 rag_result = generator.generate_grounded_answer(
                     query=user_query,
                     brand=selected_brand,
                     model=selected_model,
-                    target_section=selected_section if selected_section != "All Sections" else None
+                    target_section=selected_section if selected_section != "All Sections" else None,
+                    index_data=_preloaded
                 )
                 
             # Render answer
