@@ -16,16 +16,13 @@ st.set_page_config(
 )
 
 # Auto-rebuild index on first launch if no cars are found (important for cloud deployments)
-# This ensures Streamlit Cloud always has a working index even if the .pkl was built on a different OS.
 if "index_initialized" not in st.session_state:
     st.session_state["index_initialized"] = True
     cars_check = rag_engine.get_available_cars()
     if not cars_check:
-        with st.spinner("🔄 First launch: Building brochure index... (this takes ~2 minutes)"):
+        with st.spinner("🔄 First launch: Building brochure index from pre-loaded PDFs..."):
             indexer.build_index()
-        st.success("✅ Index built successfully! Refreshing...")
         st.rerun()
-
 
 # Custom premium styling CSS (Premium Light Theme)
 st.markdown("""
@@ -210,19 +207,37 @@ with st.sidebar:
         selected_model = None
 
     st.markdown("---")
-    st.markdown("### 📁 Document Management")
-    st.info("Place new PDF brochures in the `brochures/` folder and click below to process.")
-    
+    st.markdown("### 📁 Upload Your Own Brochure")
+    st.info("Upload a car brochure PDF below. The file name should be in the format `Brand_Model.pdf` (e.g. `Toyota_Camry.pdf`)")
+
+    uploaded_files = st.file_uploader(
+        "📎 Upload PDF Brochure(s)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Upload one or more car brochure PDFs. Name them Brand_Model.pdf for best results."
+    )
+
+    if uploaded_files:
+        brochures_dir = os.path.join(indexer.BASE_DIR, "brochures")
+        os.makedirs(brochures_dir, exist_ok=True)
+        saved_files = []
+        for uf in uploaded_files:
+            save_path = os.path.join(brochures_dir, uf.name)
+            with open(save_path, "wb") as f:
+                f.write(uf.read())
+            saved_files.append(uf.name)
+        st.success(f"✅ Saved {len(saved_files)} file(s): {', '.join(saved_files)}")
+        st.info("Click **Rebuild / Index Brochures** below to process the uploaded files.")
+
     if st.button("🔄 Rebuild / Index Brochures"):
-        with st.spinner("Processing brochures... (Extracting text, chunking, and generating embeddings)"):
+        with st.spinner("Processing brochures... (Extracting text, chunking, generating embeddings)"):
             updated = indexer.build_index()
             if updated:
-                st.success("Index updated successfully!")
-                time_sleep = 1
+                st.success("✅ Index updated successfully!")
                 st.rerun()
             else:
                 st.info("All brochures are already up to date.")
-                
+
     st.markdown("---")
     st.markdown("### 💡 Active Sections Filter")
     sections_list = ["All Sections", "Engine & Performance", "Mileage & Fuel Efficiency", "Safety", "Dimensions", "Interior & Comfort", "Infotainment & Connectivity", "General Specifications"]
