@@ -31,6 +31,111 @@ from pypdf import PdfReader
 # ============================================================
 st.set_page_config(page_title="DriveWise — Car Brochure Assistant", page_icon="🚗", layout="wide")
 
+# Custom premium styling CSS (Premium Light Theme)
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@300;400;500;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    
+    h1, h2, h3, h4 {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700;
+    }
+    
+    /* Main container background - Clean Slate Light Theme */
+    .stApp {
+        background: radial-gradient(circle at 10% 20%, #f8fafc 0%, #f1f5f9 90%);
+        color: #1e293b;
+    }
+    
+    /* Custom header design */
+    .header-container {
+        padding: 1.5rem 0rem 2rem 0rem;
+        border-bottom: 1px solid #e2e8f0;
+        margin-bottom: 2rem;
+        background: linear-gradient(90deg, #eff6ff 0%, rgba(255,255,255,0) 100%);
+        border-radius: 12px;
+        padding-left: 20px;
+    }
+    
+    .header-title {
+        font-size: 2.8rem;
+        background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.2rem;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+    }
+    
+    .header-subtitle {
+        font-size: 1.1rem;
+        color: #64748b;
+        font-weight: 300;
+    }
+    
+    /* Card containers */
+    .metric-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 1.25rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        border-color: #3b82f6;
+        transform: translateY(-2px);
+    }
+    
+    .metric-val {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1d4ed8;
+        margin-bottom: 0.25rem;
+    }
+    
+    .metric-label {
+        font-size: 0.85rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Custom button styling */
+    .stButton>button {
+        background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%) !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 0.6rem 1.8rem !important;
+        transition: all 0.2s ease !important;
+        box-shadow: 0 4px 15px rgba(29, 78, 216, 0.2) !important;
+    }
+    
+    .stButton>button:hover {
+        transform: scale(1.02) !important;
+        box-shadow: 0 6px 20px rgba(29, 78, 216, 0.4) !important;
+    }
+    
+    /* Sidebar adjustments */
+    .stSelectbox label {
+        color: #334155 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Hide default streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
+
 DB_PATH = "logs/query_logs.db"
 BROCHURE_DIR = "brochures"
 SAMPLES_BASE = "https://raw.githubusercontent.com/avanishar/drivewiseapp/main"
@@ -252,6 +357,7 @@ def index_pdf(filepath):
 
 def load_samples():
     os.makedirs(BROCHURE_DIR, exist_ok=True)
+    # Download PDFs in background so they exist in library
     for fname in SAMPLE_FILES:
         fpath = f"{BROCHURE_DIR}/{fname}"
         if not os.path.exists(fpath):
@@ -259,13 +365,18 @@ def load_samples():
                 req = urllib.request.Request(f"{SAMPLES_BASE}/{fname}", headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req) as response, open(fpath, "wb") as out_file:
                     out_file.write(response.read())
-                if os.path.getsize(fpath) / 1024 < 10:
-                    os.remove(fpath)
             except Exception:
-                continue
-    for fname in os.listdir(BROCHURE_DIR):
-        if fname.lower().endswith(".pdf"):
-            index_pdf(f"{BROCHURE_DIR}/{fname}")
+                pass
+    # Download pre-built chunks index to save time and API quota
+    try:
+        url = f"{SAMPLES_BASE}/brochure_index.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        st.session_state.index_data.clear()
+        st.session_state.index_data.update(data)
+    except Exception as e:
+        st.error(f"Failed to load pre-built index: {e}")
 
 
 def get_car_map():
@@ -496,8 +607,12 @@ with st.sidebar:
 # ============================================================
 # Main area — Chat + Dashboard tabs
 # ============================================================
-st.title("🚗 Drive Wise")
-st.caption("Ask questions about any indexed car brochure and get grounded, cited answers.")
+st.markdown("""
+    <div class="header-container">
+        <div class="header-title">Drive Wise</div>
+        <div class="header-subtitle">Metadata-Aware Automotive RAG Assistant — Guided Car Decisions</div>
+    </div>
+""", unsafe_allow_html=True)
 
 tab_chat, tab_dashboard = st.tabs(["💬 Chat", "📊 Quality Dashboard"])
 
