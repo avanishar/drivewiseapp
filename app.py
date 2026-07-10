@@ -350,7 +350,10 @@ def retrieve(query, brand, model, limit=4):
         scored.append({**c, "score": 0.8 * sem + 0.2 * kw})
     scored.sort(key=lambda x: x["score"], reverse=True)
     candidates = scored[:limit * 2]
-    return rerank_chunks(query, candidates, limit)
+    if st.session_state.get("enable_reranking", True):
+        return rerank_chunks(query, candidates, limit)
+    else:
+        return candidates[:limit]
 
 
 def generate_answer(query, brand, model):
@@ -479,6 +482,17 @@ with st.sidebar:
     else:
         st.caption("No brochures indexed yet.")
 
+    st.divider()
+    st.subheader("⚙️ API Quota Optimizer")
+    st.session_state["enable_reranking"] = st.toggle(
+        "Enable Re-ranking", value=True,
+        help="Disabling this uses fast local hybrid sorting and saves 1 LLM request per query."
+    )
+    st.session_state["enable_evaluation"] = st.toggle(
+        "Enable LLM-as-a-Judge", value=True,
+        help="Disabling this skips background quality grading and saves 1 LLM request per query."
+    )
+
 # ============================================================
 # Main area — Chat + Dashboard tabs
 # ============================================================
@@ -511,13 +525,15 @@ with tab_chat:
                         for i, s in enumerate(item["sources"])
                     )
                     st.caption("Sources: " + tags)
-                if item.get("metrics"):
+                if item.get("metrics") and item["metrics"].get("faithfulness", 0.0) > 0:
                     m = item["metrics"]
                     st.caption(
                         f"📊 Faithfulness **{m['faithfulness']:.1f}/5** · "
                         f"Context Relevance **{m['relevance']:.1f}/5** · "
                         f"Answer Correctness **{m['correctness']:.1f}/5** · {item['time']}s"
                     )
+                else:
+                    st.caption(f"⏱️ Response time: {item['time']}s")
 
         query = st.chat_input(f"Ask about the {brand} {model}...")
         if query:
@@ -529,8 +545,11 @@ with tab_chat:
                     answer, sources = generate_answer(query, brand, model)
                     elapsed = round(time.time() - t0, 2)
                     is_failed = (not sources) or any(w in answer.lower() for w in ["sorry", "not available", "error"])
-                with st.spinner("Evaluating answer quality..."):
-                    relevance, faithfulness, correctness, rationale = evaluate_answer(query, sources, answer)
+                if st.session_state.get("enable_evaluation", True):
+                    with st.spinner("Evaluating answer quality..."):
+                        relevance, faithfulness, correctness, rationale = evaluate_answer(query, sources, answer)
+                else:
+                    relevance, faithfulness, correctness, rationale = 0.0, 0.0, 0.0, "Evaluations disabled."
                 log_to_db(query, brand, model, answer, elapsed, is_failed,
                           faithfulness, relevance, correctness, sources)
 
@@ -541,10 +560,13 @@ with tab_chat:
                         for i, s in enumerate(sources)
                     )
                     st.caption("Sources: " + tags)
-                st.caption(
-                    f"📊 Faithfulness **{faithfulness:.1f}/5** · Context Relevance **{relevance:.1f}/5** · "
-                    f"Answer Correctness **{correctness:.1f}/5** · {elapsed}s"
-                )
+                if st.session_state.get("enable_evaluation", True):
+                    st.caption(
+                        f"📊 Faithfulness **{faithfulness:.1f}/5** · Context Relevance **{relevance:.1f}/5** · "
+                        f"Answer Correctness **{correctness:.1f}/5** · {elapsed}s"
+                    )
+                else:
+                    st.caption(f"⏱️ Response time: {elapsed}s (Quality metrics disabled)")
 
             st.session_state.chat_history[car_key].append({
                 "query": query, "answer": answer, "sources": sources, "time": elapsed,
