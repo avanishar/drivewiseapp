@@ -63,51 +63,64 @@ def get_file_hash(filepath):
         hasher.update(buf)
     return hasher.hexdigest()
 
-def extract_brand_and_model(filepath, first_page_text):
+def extract_metadata(filepath, first_page_text):
     """
-    Identifies the brand and model from the filename, or falls back to Gemini LLM 
-    to extract them from the first page text.
+    Identifies the brand, model, and document version from the filename or falls back 
+    to Gemini LLM to extract them from the first page text.
     """
     filename = os.path.basename(filepath)
     name_without_ext = os.path.splitext(filename)[0]
     
-    # Try parsing brand_model or brand-model
+    brand, model, version = "Unknown Brand", name_without_ext.title(), "1.0"
+    
+    # Try parsing brand_model or brand-model from filename
     for separator in ["_", "-"]:
         if separator in name_without_ext:
             parts = name_without_ext.split(separator)
             if len(parts) >= 2:
                 brand = parts[0].strip().title()
                 model = " ".join(parts[1:]).strip().title()
-                return brand, model
+                break
                 
-    # Fallback to Gemini LLM
+    # Fallback/refinement using Gemini LLM to extract version and confirm brand/model
     try:
         prompt = f"""
-        Extract the car brand and model from the following text of the first page of the car brochure.
+        Extract the car brand, model, and brochure document version from the following text of the first page of the car brochure.
+        Look for version numbers (e.g., v1.2, version 2), model years (e.g., MY24, MY2023, 2024 MY), or publication/print dates (e.g., 11/2023, August 2022).
+        
         Text:
         ---
-        {first_page_text[:1500]}
+        {first_page_text[:2000]}
         ---
-        Respond with ONLY a valid JSON object in this format (no markdown code blocks, just raw JSON text):
-        {{"brand": "BrandName", "model": "ModelName"}}
-        If you cannot extract the brand or model, guess based on common car brands (e.g., Hyundai, Tata, Suzuki, Honda, Toyota).
+        Respond with ONLY a valid JSON object in this format (no markdown blocks, just raw JSON text):
+        {{"brand": "BrandName", "model": "ModelName", "version": "VersionInfo"}}
+        If you cannot extract the version, use "1.0".
         """
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
-        response = model.generate_content(prompt)
-        import json
+        model_gen = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = model_gen.generate_content(prompt)
         text = response.text.strip()
-        # Clean any accidental markdown format from response
         if text.startswith("```json"):
             text = text[7:]
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
         data = json.loads(text)
-        return data["brand"].strip().title(), data["model"].strip().title()
+        
+        # Prioritize filename-parsed brand/model, fallback to LLM
+        brand_extracted = brand if brand != "Unknown Brand" else data.get("brand", "").strip().title()
+        model_extracted = model if brand != "Unknown Brand" else data.get("model", "").strip().title()
+        version_extracted = data.get("version", "1.0").strip()
+        
+        if not brand_extracted or brand_extracted.lower() in ["unknown", "unknown brand"]:
+            brand_extracted = brand
+        if not model_extracted or model_extracted.lower() in ["unknown", "unknown model"]:
+            model_extracted = model
+            
+        return brand_extracted, model_extracted, version_extracted
     except Exception as e:
-        print(f"Error calling LLM for brand/model extraction: {e}")
-        # Default fallback to filename
-        return "Unknown Brand", name_without_ext.title()
+        print(f"Error calling LLM for metadata extraction: {e}")
+        return brand, model, version
+
 
 def classify_section(text):
     """Classifies a chunk of text into one of the standard brochure sections."""
@@ -148,8 +161,8 @@ def get_chunks_from_pdf(filepath):
     if num_pages > 0:
         first_page_text = reader.pages[0].extract_text() or ""
         
-    brand, model = extract_brand_and_model(filepath, first_page_text)
-    print(f"Indexing brochure for: {brand} {model} (from {os.path.basename(filepath)})")
+    brand, model, version = extract_metadata(filepath, first_page_text)
+    print(f"Indexing brochure for: {brand} {model} (version: {version}) (from {os.path.basename(filepath)})")
     
     chunks = []
     for page_idx in range(num_pages):
@@ -185,6 +198,7 @@ def get_chunks_from_pdf(filepath):
                             "model": model,
                             "section": section,
                             "page": page_num,
+                            "version": version,
                             "source_file": os.path.basename(filepath)
                         })
                         current_chunk = [line]
@@ -202,6 +216,7 @@ def get_chunks_from_pdf(filepath):
                         "model": model,
                         "section": section,
                         "page": page_num,
+                        "version": version,
                         "source_file": os.path.basename(filepath)
                     })
                     current_chunk = [para]
@@ -220,6 +235,7 @@ def get_chunks_from_pdf(filepath):
                 "model": model,
                 "section": section,
                 "page": page_num,
+                "version": version,
                 "source_file": os.path.basename(filepath)
             })
             
@@ -337,7 +353,8 @@ def build_index(brochures_dir=None):
                 "chunks_count": len(new_chunks),
                 "indexed_at": time.time(),
                 "brand": new_chunks[0]["brand"] if new_chunks else "Unknown",
-                "model": new_chunks[0]["model"] if new_chunks else "Unknown"
+                "model": new_chunks[0]["model"] if new_chunks else "Unknown",
+                "version": new_chunks[0]["version"] if new_chunks else "1.0"
             }
             print(f"Successfully indexed {filename} ({len(new_chunks)} chunks).")
             

@@ -123,6 +123,53 @@ def get_available_cars(index_data=None):
         
     return cars
 
+def rerank_chunks(query, chunks, limit=4):
+    """
+    Reranks a list of candidate chunks using Gemini 2.5 Flash as an LLM-based re-ranker.
+    """
+    if not chunks or len(chunks) <= 1:
+        return chunks[:limit]
+        
+    try:
+        candidates_str = ""
+        for idx, c in enumerate(chunks):
+            candidates_str += f"\n--- Candidate [{idx}] ---\n{c['text']}\n"
+            
+        prompt = f"""
+        You are an expert automotive search ranker. Your task is to re-rank the following candidate chunks from a car brochure based on their relevance to the user's query.
+        
+        User Query: "{query}"
+        
+        Candidate Chunks:
+        {candidates_str}
+        
+        Re-rank these candidates from most relevant to least relevant. Return the ordered list of candidate indices as a JSON array of integers.
+        For example, if candidate [2] is the most relevant, followed by [0], then [1], respond with exactly:
+        [2, 0, 1]
+        
+        Do NOT explain your reasoning, do NOT output markdown code blocks, respond with ONLY the JSON array.
+        """
+        model_gen = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = model_gen.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        
+        ordered_indices = json.loads(text)
+        ordered_indices = [int(i) for i in ordered_indices if 0 <= int(i) < len(chunks)]
+        reranked = [chunks[i] for i in ordered_indices]
+        # Append any missed candidates
+        for c in chunks:
+            if c not in reranked:
+                reranked.append(c)
+        return reranked[:limit]
+    except Exception as e:
+        print(f"Re-ranking error, falling back to hybrid sort: {e}")
+        return chunks[:limit]
+
 def retrieve_chunks(query, brand, model, limit=4, target_section=None, index_data=None):
     """
     Retrieves and re-ranks the most relevant chunks for a specific brand and model.
@@ -164,7 +211,7 @@ def retrieve_chunks(query, brand, model, limit=4, target_section=None, index_dat
         print(f"Failed to embed query: {e}")
         return []
         
-    # 3. Retrieve & Compute Hybrid Scores
+    # 3. Retrieve & Compute Hybrid Scores (Stage 1)
     retrieved = []
     for chunk in filtered_chunks:
         emb = chunk.get("embedding")
@@ -184,6 +231,7 @@ def retrieve_chunks(query, brand, model, limit=4, target_section=None, index_dat
             "model": chunk["model"],
             "section": chunk["section"],
             "page": chunk["page"],
+            "version": chunk.get("version", "1.0"),
             "source_file": chunk["source_file"],
             "score": float(hybrid_score),
             "semantic_score": float(semantic_score),
@@ -193,11 +241,13 @@ def retrieve_chunks(query, brand, model, limit=4, target_section=None, index_dat
     # Sort by hybrid score in descending order
     retrieved.sort(key=lambda x: x["score"], reverse=True)
     
-    # Take top candidates for re-ranking
+    # Take top candidates for re-ranking (Stage 2)
     candidates = retrieved[:limit*2]
     
-    # 4. Return top-K candidates directly for speed (avoiding slow LLM re-ranking call)
-    return candidates[:limit]
+    # Run generative re-ranking on the top candidate set
+    reranked = rerank_chunks(query, candidates, limit)
+    
+    return reranked
 
 if __name__ == "__main__":
     # Test retrieval

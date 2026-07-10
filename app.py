@@ -307,7 +307,7 @@ with tab1:
                             st.markdown(f"""
                                 <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: rgba(255,255,255,0.01); border-radius: 6px;">
                                     <span class="source-tag">[{src['citation_num']}] Section: {src['section']}</span>
-                                    <span class="source-file-tag">File: {src['source_file']} (Page {src['page']})</span>
+                                    <span class="source-file-tag">File: {src['source_file']} (Page {src['page']}, Version: {src.get('version', '1.0')})</span>
                                     <p style="font-size: 0.9rem; margin-top: 0.4rem; color: #cbd5e0; line-height: 1.5; font-style: italic;">
                                         "{src['text']}"
                                     </p>
@@ -351,7 +351,7 @@ with tab1:
                         st.markdown(f"""
                             <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: rgba(255,255,255,0.01); border-radius: 6px;">
                                 <span class="source-tag">[{src['citation_num']}] Section: {src['section']}</span>
-                                <span class="source-file-tag">File: {src['source_file']} (Page {src['page']})</span>
+                                <span class="source-file-tag">File: {src['source_file']} (Page {src['page']}, Version: {src.get('version', '1.0')})</span>
                                 <p style="font-size: 0.9rem; margin-top: 0.4rem; color: #cbd5e0; line-height: 1.5; font-style: italic;">
                                     "{src['text']}"
                                 </p>

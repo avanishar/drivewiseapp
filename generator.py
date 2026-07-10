@@ -202,6 +202,7 @@ def generate_grounded_answer(query, brand, model, target_section=None, index_dat
             "text": c["text"],
             "section": c["section"],
             "page": c["page"],
+            "version": c.get("version", "1.0"),
             "source_file": c["source_file"],
             "score": c.get("score", 0.0)
         })
