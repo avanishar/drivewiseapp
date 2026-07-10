@@ -4,8 +4,8 @@ import time
 import numpy as np
 import google.generativeai as genai
 
-# Setup Google Generative AI
-genai.configure()
+# Setup Google Generative AI — reads GOOGLE_API_KEY from environment (set as secret on HF Spaces)
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 # Use __file__-based absolute paths so the app works on any server (including Streamlit Cloud)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -6,8 +6,8 @@ import numpy as np
 from pypdf import PdfReader
 import google.generativeai as genai
 
-# Setup Google Generative AI
-genai.configure()
+# Setup Google Generative AI — reads GOOGLE_API_KEY from environment (set as secret on HF Spaces)
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 # Standard brochure sections
 SECTIONS = [

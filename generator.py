@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import threading
@@ -5,8 +6,8 @@ import google.generativeai as genai
 from rag_engine import retrieve_chunks
 from logger import log_query
 
-# Setup Google Generative AI
-genai.configure()
+# Setup Google Generative AI — reads GOOGLE_API_KEY from environment (set as secret on HF Spaces)
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 def run_evaluation_and_log_async(query, brand, model, response_text, is_failed, elapsed_time, sources_list, context_str):
     """
