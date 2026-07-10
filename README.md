@@ -1,15 +1,4 @@
----
-title: DriveWise
-emoji: 🚗
-colorFrom: blue
-colorTo: indigo
-sdk: streamlit
-sdk_version: 1.49.0
-app_file: app.py
-pinned: false
-license: mit
-short_description: Metadata-Aware Automotive RAG Assistant
----
+
 
 # 🚗 DriveWise — Metadata-Aware Automotive RAG Assistant
 
