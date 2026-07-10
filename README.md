@@ -2,7 +2,7 @@
 
 # 🚗 DriveWise — Metadata-Aware Automotive RAG Assistant
 
-> **Live Streamlit App**: [drivewiseapp.streamlit.app](https://drivewiseapp-mxwoyuqx563zbik6ycvw2b.streamlit.app/)
+> **Live Streamlit App**: https://drivewiseapp-ciuywocmba6jemreq6x4jd.streamlit.app/
 
 DriveWise is an interactive, AI-powered automotive assistant designed to make car buyers' and owners' decisions easier. Instead of scrolling through dry, 50-page PDF brochures, DriveWise lets you chat with brochures directly and get grounded, cited answers about any car's specifications, safety features, mileage, or dimensions.
 
