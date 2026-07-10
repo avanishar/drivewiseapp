@@ -150,7 +150,24 @@ def rerank_chunks(query, chunks, limit=4):
         Do NOT explain your reasoning, do NOT output markdown code blocks, respond with ONLY the JSON array.
         """
         model_gen = genai.GenerativeModel("models/gemini-2.5-flash")
-        response = model_gen.generate_content(prompt)
+        
+        response = None
+        max_retries = 5
+        delay = 10
+        for attempt in range(max_retries):
+            try:
+                response = model_gen.generate_content(prompt)
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                    if attempt == max_retries - 1:
+                        raise e
+                    print(f"Rate limit hit during re-ranking. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    raise e
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
