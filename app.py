@@ -263,7 +263,7 @@ def extract_metadata(filepath, first_page_text):
         {{"brand": "BrandName", "model": "ModelName", "version": "VersionInfo"}}
         If you cannot extract the version, return "1.0" as the default version.
         """
-        model_gen = genai.GenerativeModel("models/gemini-2.0-flash")
+        model_gen = genai.GenerativeModel("models/gemini-flash-latest")
         response = generate_content_with_retry(model_gen, prompt)
         text = response.text.strip()
         if text.startswith("```json"):
@@ -423,7 +423,7 @@ def rerank_chunks(query, chunks, limit=4):
         of candidate indices as a JSON array of integers, e.g. [2, 0, 1].
         Do NOT explain your reasoning, do NOT output markdown code blocks, respond with ONLY the JSON array.
         """
-        model_gen = genai.GenerativeModel("models/gemini-2.0-flash")
+        model_gen = genai.GenerativeModel("models/gemini-flash-latest")
         response = generate_content_with_retry(model_gen, prompt)
         text = response.text.strip()
         if text.startswith("```json"):
@@ -478,7 +478,7 @@ def generate_answer(query, brand, model):
     )
     prompt = f"Brochure Context for {brand} {model}:\n{context_str}\nUser Query: \"{query}\"\nGrounded Answer:"
     try:
-        model_gen = genai.GenerativeModel(model_name="models/gemini-2.0-flash", system_instruction=sys_prompt)
+        model_gen = genai.GenerativeModel(model_name="models/gemini-flash-latest", system_instruction=sys_prompt)
         resp = generate_content_with_retry(model_gen, prompt,
                                             generation_config=genai.types.GenerationConfig(temperature=0.1))
         return resp.text.strip(), chunks
@@ -526,7 +526,7 @@ def evaluate_answer(query, chunks, answer):
         Respond with ONLY a valid JSON object (no markdown blocks):
         {{"context_relevance": float, "faithfulness": float, "answer_correctness": float, "rationale": "string"}}
         """
-        model_eval = genai.GenerativeModel("models/gemini-2.0-flash")
+        model_eval = genai.GenerativeModel("models/gemini-flash-latest")
         response = generate_content_with_retry(model_eval, eval_prompt)
         text = response.text.strip()
         if text.startswith("```json"):
