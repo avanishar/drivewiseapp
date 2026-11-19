@@ -1,7 +1,6 @@
 """
 DriveWise — Metadata-Aware Automotive RAG Assistant (Streamlit App)
-Improved UI: streaming output, status containers, Plotly dashboard.
-Fixed model: gemini-3.5-flash-lite (available for new API keys).
+Demo-safe version: streaming fallback, re-ranking guard, debug sidebar.
 """
 
 import os
@@ -81,13 +80,12 @@ if not api_key:
     st.stop()
 
 client = genai.Client(api_key=api_key)
-MODEL_NAME = "gemini-3.5-flash-lite"  # Available for new API keys [citation:1]
+MODEL_NAME = "gemini-3.5-flash-lite"
 EMBED_MODEL = "models/gemini-embedding-001"
 
 
-def generate_with_retry(prompt, system_instruction=None, max_retries=5):
-    """Non-streaming generation with retry on rate limits."""
-    delay = 10
+def generate_with_retry(prompt, system_instruction=None, max_retries=3):
+    delay = 5
     for attempt in range(max_retries):
         try:
             config = types.GenerateContentConfig(
@@ -100,7 +98,7 @@ def generate_with_retry(prompt, system_instruction=None, max_retries=5):
             )
         except Exception as e:
             err = str(e).lower()
-            if any(t in err for t in ["429", "quota", "limit", "exhausted"]):
+            if any(t in err for t in ["429", "quota", "limit", "exhausted", "500", "503", "server"]):
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(delay)
@@ -110,18 +108,37 @@ def generate_with_retry(prompt, system_instruction=None, max_retries=5):
 
 
 def generate_stream(prompt, system_instruction=None):
-    """Generator for streaming output, compatible with st.write_stream."""
+    """Streaming with non-streaming fallback. Never raises a traceback to the UI."""
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
     ) if system_instruction else None
-    response = client.models.generate_content_stream(
-        model=MODEL_NAME,
-        contents=prompt,
-        config=config,
-    )
-    for chunk in response:
-        if chunk.text:
-            yield chunk.text
+    try:
+        response = client.models.generate_content_stream(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=config,
+        )
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+    except Exception as stream_err:
+        print(f"[generate_stream] streaming failed: {stream_err}. Falling back.")
+        try:
+            resp = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=config,
+            )
+            if resp.text:
+                yield resp.text
+            else:
+                yield "The model returned an empty response. Please try rephrasing your question."
+        except Exception as fallback_err:
+            print(f"[generate_stream] fallback failed: {fallback_err}")
+            yield (
+                "I couldn't reach the language model right now (server error). "
+                "Please try again in a moment."
+            )
 
 
 # ============================================================
@@ -243,11 +260,11 @@ def embed_chunks(chunks):
                 break
             except Exception as e:
                 err_lower = str(e).lower()
-                if any(t in err_lower for t in ["429", "500", "503", "connection", "timeout"]) and attempt < 5:
+                if any(t in err_lower for t in ["429", "500", "503", "connection", "timeout", "server"]) and attempt < 5:
                     time.sleep(5 * (2 ** attempt))
                 else:
                     raise
-        time.sleep(0.5)
+        time.sleep(0.3)
 
 
 def index_pdf(filepath):
@@ -311,6 +328,8 @@ def kw_score(query, text):
 
 
 def rerank_chunks(query, chunks, limit=4):
+    """Re-rank with the LLM. On any parse/failure, fall back to Stage-1 order
+    (which is still query-dependent) and log the reason."""
     if not chunks or len(chunks) <= 1:
         return chunks[:limit]
     try:
@@ -343,29 +362,59 @@ def rerank_chunks(query, chunks, limit=4):
             if c not in reranked:
                 reranked.append(c)
         return reranked[:limit]
-    except Exception:
+    except Exception as e:
+        print(f"[rerank_chunks] failed ({e}); using Stage-1 order.")
         return chunks[:limit]
 
 
-def retrieve(query, brand, model, limit=4):
+def retrieve(query, brand, model, limit=4, debug=False):
+    """Hybrid retrieval + optional re-ranking. Returns (chunks, debug_info)."""
+    debug_info = {"filtered_count": 0, "scored": [], "rerank_used": False, "error": None}
     filtered = [c for c in index_data["chunks"]
                 if c.get("brand", "").lower() == brand.lower()
                 and c.get("model", "").lower() == model.lower()]
+    debug_info["filtered_count"] = len(filtered)
     if not filtered:
-        return []
-    emb_resp = client.models.embed_content(model=EMBED_MODEL, contents=query)
-    q_emb = emb_resp.embeddings[0].values
+        return [], debug_info
+
+    try:
+        emb_resp = client.models.embed_content(model=EMBED_MODEL, contents=query)
+        q_emb = np.array(emb_resp.embeddings[0].values, dtype=np.float32)
+    except Exception as e:
+        debug_info["error"] = f"embedding failed: {e}"
+        print(f"[retrieve] query embedding failed: {e}")
+        return [], debug_info
+
     scored = []
+    missing_emb = 0
     for c in filtered:
         emb = c.get("embedding")
         if emb is None:
+            missing_emb += 1
             continue
+        emb = np.array(emb, dtype=np.float32) if not isinstance(emb, np.ndarray) else emb
         sem = cosine_sim(q_emb, emb)
         kw = kw_score(query, c["text"])
         scored.append({**c, "score": 0.8 * sem + 0.2 * kw})
+    debug_info["missing_embedding_chunks"] = missing_emb
+    debug_info["scored"] = sorted(scored, key=lambda x: x["score"], reverse=True)[:6]
+
+    if not scored:
+        debug_info["error"] = "no chunks had embeddings"
+        return [], debug_info
+
     scored.sort(key=lambda x: x["score"], reverse=True)
     candidates = scored[:limit * 2]
-    return rerank_chunks(query, candidates, limit)
+
+    # Skip re-ranking in demo mode (debug flag or explicit env var)
+    skip_rerank = os.environ.get("DRIVEWISE_SKIP_RERANK", "0") == "1"
+    if skip_rerank:
+        debug_info["rerank_used"] = False
+        return candidates[:limit], debug_info
+
+    reranked = rerank_chunks(query, candidates, limit)
+    debug_info["rerank_used"] = True
+    return reranked, debug_info
 
 
 def build_context(chunks):
@@ -476,7 +525,6 @@ with st.sidebar:
             with st.status(f"Indexing {f.name}...", expanded=False) as status:
                 st.write("Extracting text and metadata...")
                 index_pdf(path)
-                st.write("Done.")
                 status.update(label=f"{f.name} indexed", state="complete")
         st.success(f"Indexed {len(uploaded_files)} file(s)!")
 
@@ -487,6 +535,17 @@ with st.sidebar:
             st.caption(f"• {meta['brand']} {meta['model']} (v{meta.get('version', '1.0')}) — {meta['chunks_count']} chunks")
     else:
         st.caption("No brochures indexed yet.")
+
+    st.divider()
+    st.subheader("🛠️ Demo Controls")
+    debug_mode = st.checkbox("Show retrieval debug info", value=False,
+                             help="Print retrieved chunks + prompt for each query.")
+    skip_rerank = st.checkbox("Skip LLM re-ranking (faster)", value=False,
+                              help="Return Stage-1 hybrid order directly.")
+    if skip_rerank:
+        os.environ["DRIVEWISE_SKIP_RERANK"] = "1"
+    else:
+        os.environ["DRIVEWISE_SKIP_RERANK"] = "0"
 
 
 # ============================================================
@@ -535,11 +594,21 @@ with tab_chat:
                 st.write(query)
 
             with st.chat_message("assistant"):
-                # Step 1: Retrieval with status container
                 with st.status("Processing your question...", expanded=True) as status:
                     st.write("🔍 Retrieving relevant brochure chunks...")
                     t0 = time.time()
-                    chunks = retrieve(query, brand, model)
+                    chunks, dbg = retrieve(query, brand, model, debug=debug_mode)
+
+                    if debug_mode:
+                        st.write(f"**Debug:** {dbg['filtered_count']} chunks for this car, "
+                                 f"missing embeddings: {dbg.get('missing_embedding_chunks', 0)}, "
+                                 f"rerank used: {dbg['rerank_used']}")
+                        if dbg.get("error"):
+                            st.write(f"**Debug error:** {dbg['error']}")
+                        if dbg.get("scored"):
+                            st.write("**Top Stage-1 scores:**")
+                            for s in dbg["scored"]:
+                                st.write(f"- page {s['page']} | {s['section']} | score {s['score']:.3f} | {s['text'][:80]}...")
 
                     if not chunks:
                         st.write("❌ No relevant chunks found.")
@@ -553,7 +622,12 @@ with tab_chat:
                         st.write("📄 Building context...")
                         context_str = build_context(chunks)
                         sys_prompt = get_system_prompt(brand, model)
-                        prompt = f"Brochure Context for {brand} {model}:\n{context_str}\nUser Query: \"{query}\"\nGrounded Answer:"
+                        prompt = (f"Brochure Context for {brand} {model}:\n{context_str}\n"
+                                  f"User Query: \"{query}\"\nGrounded Answer:")
+
+                        if debug_mode:
+                            st.write("**Debug: final prompt (first 1200 chars):**")
+                            st.code(prompt[:1200])
 
                         st.write("✍️ Generating answer...")
                         answer = st.write_stream(generate_stream(prompt, system_instruction=sys_prompt))
@@ -564,7 +638,6 @@ with tab_chat:
                         sources = chunks
                         status.update(label=f"Completed in {elapsed}s", state="complete", expanded=False)
 
-                # Display sources and metrics
                 if sources:
                     with st.expander("📎 View Sources"):
                         for i, s in enumerate(sources):
@@ -578,7 +651,6 @@ with tab_chat:
                     f"Correctness **{correctness:.1f}/5** · {elapsed}s"
                 )
 
-            # Log and save
             log_to_db(query, brand, model, answer, elapsed, is_failed,
                       faithfulness, relevance, correctness, sources)
             st.session_state.chat_history[car_key].append({
@@ -610,29 +682,24 @@ with tab_dashboard:
             c4.metric("Avg Quality Score", f"{avg_quality:.2f}/5.0")
 
             colA, colB = st.columns(2)
-
             with colA:
                 st.caption("Average RAG Quality (LLM-as-judge)")
                 quality_df = pd.DataFrame({
                     "Metric": ["Faithfulness", "Context Relevance", "Answer Correctness"],
                     "Score": [df["faithfulness"].mean(), df["context_relevance"].mean(), df["answer_correctness"].mean()],
                 })
-                fig1 = px.bar(quality_df, x="Metric", y="Score",
-                              color="Metric",
+                fig1 = px.bar(quality_df, x="Metric", y="Score", color="Metric",
                               color_discrete_sequence=["#2563eb", "#059669", "#d97706"],
                               text_auto=".2f")
                 fig1.update_layout(showlegend=False, yaxis_range=[0, 5.5], height=350)
                 st.plotly_chart(fig1, use_container_width=True)
-
             with colB:
                 st.caption("Quality Score Trend Over Time")
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
                 df["quality_avg"] = (df["faithfulness"] + df["context_relevance"] + df["answer_correctness"]) / 3
                 trend = df.sort_values("timestamp").tail(20)
-                fig2 = px.line(trend, x="timestamp", y="quality_avg",
-                               markers=True,
-                               labels={"timestamp": "Time", "quality_avg": "Avg Quality"},
-                               title=None)
+                fig2 = px.line(trend, x="timestamp", y="quality_avg", markers=True,
+                               labels={"timestamp": "Time", "quality_avg": "Avg Quality"})
                 fig2.update_layout(height=350, yaxis_range=[0, 5.5])
                 st.plotly_chart(fig2, use_container_width=True)
 
