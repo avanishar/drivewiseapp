@@ -1,15 +1,6 @@
 """
 DriveWise — Metadata-Aware Automotive RAG Assistant (Streamlit App)
-
-Standalone web version of the DriveWise notebook pipeline:
-PDF chunking -> metadata extraction (brand/model/version) -> Gemini embeddings
--> hybrid retrieval + LLM re-ranking -> grounded generation -> LLM-as-judge
-evaluation -> persistent SQLite logging -> quality dashboard.
-
-Run locally:      streamlit run app.py
-Deploy:           push this file + requirements.txt to GitHub, then deploy on
-                  Streamlit Community Cloud (share.streamlit.io), and add your
-                  GOOGLE_API_KEY under the app's Settings -> Secrets.
+Improved UI: streaming output, status containers, Plotly dashboard.
 """
 
 import os
@@ -23,118 +14,15 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
-import google.generativeai as genai
+import plotly.express as px
+from google import genai
+from google.genai import types
 from pypdf import PdfReader
 
 # ============================================================
 # Config
 # ============================================================
-st.set_page_config(page_title="DriveWise — Car Brochure Assistant", page_icon="🚗", layout="wide")
-
-# Custom premium styling CSS (Premium Light Theme)
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@300;400;500;700&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Plus Jakarta Sans', sans-serif;
-    }
-    
-    h1, h2, h3, h4 {
-        font-family: 'Outfit', sans-serif;
-        font-weight: 700;
-    }
-    
-    /* Main container background - Clean Slate Light Theme */
-    .stApp {
-        background: radial-gradient(circle at 10% 20%, #f8fafc 0%, #f1f5f9 90%);
-        color: #1e293b;
-    }
-    
-    /* Custom header design */
-    .header-container {
-        padding: 1.5rem 0rem 2rem 0rem;
-        border-bottom: 1px solid #e2e8f0;
-        margin-bottom: 2rem;
-        background: linear-gradient(90deg, #eff6ff 0%, rgba(255,255,255,0) 100%);
-        border-radius: 12px;
-        padding-left: 20px;
-    }
-    
-    .header-title {
-        font-size: 2.8rem;
-        background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.2rem;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-    }
-    
-    .header-subtitle {
-        font-size: 1.1rem;
-        color: #64748b;
-        font-weight: 300;
-    }
-    
-    /* Card containers */
-    .metric-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 16px;
-        padding: 1.25rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-        transition: all 0.3s ease;
-    }
-    
-    .metric-card:hover {
-        border-color: #3b82f6;
-        transform: translateY(-2px);
-    }
-    
-    .metric-val {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1d4ed8;
-        margin-bottom: 0.25rem;
-    }
-    
-    .metric-label {
-        font-size: 0.85rem;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Custom button styling */
-    .stButton>button {
-        background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%) !important;
-        color: #ffffff !important;
-        font-weight: 700 !important;
-        border: none !important;
-        border-radius: 10px !important;
-        padding: 0.6rem 1.8rem !important;
-        transition: all 0.2s ease !important;
-        box-shadow: 0 4px 15px rgba(29, 78, 216, 0.2) !important;
-    }
-    
-    .stButton>button:hover {
-        transform: scale(1.02) !important;
-        box-shadow: 0 6px 20px rgba(29, 78, 216, 0.4) !important;
-    }
-    
-    /* Sidebar adjustments */
-    .stSelectbox label {
-        color: #334155 !important;
-        font-weight: 600 !important;
-    }
-    
-    /* Hide default streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    </style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="DriveWise", page_icon="🚗", layout="wide")
 
 DB_PATH = "logs/query_logs.db"
 BROCHURE_DIR = "brochures"
@@ -169,7 +57,7 @@ STOPWORDS = {
 }
 
 # ============================================================
-# API key + Gemini setup
+# API key + Gemini client
 # ============================================================
 def get_api_key():
     key = None
@@ -186,42 +74,66 @@ api_key = get_api_key()
 if not api_key:
     st.error(
         "No `GOOGLE_API_KEY` found.\n\n"
-        "- **Locally**: set it as an environment variable, or create `.streamlit/secrets.toml` "
-        "with `GOOGLE_API_KEY = \"your-key\"`.\n"
-        "- **On Streamlit Cloud**: add it under your app's **Settings → Secrets**."
+        "- **Locally**: set it as an environment variable or create `.streamlit/secrets.toml`.\n"
+        "- **On Streamlit Cloud**: add it under **Settings → Secrets**."
     )
     st.stop()
 
-genai.configure(api_key=api_key)
+client = genai.Client(api_key=api_key)
+MODEL_NAME = "gemini-2.5-flash"  # Stable model on v1 endpoint
+EMBED_MODEL = "models/gemini-embedding-001"
 
 
-def generate_content_with_retry(model, prompt, generation_config=None, max_retries=5):
+def generate_with_retry(prompt, system_instruction=None, temperature=0.1, max_retries=5):
     delay = 10
     for attempt in range(max_retries):
         try:
-            if generation_config:
-                return model.generate_content(prompt, generation_config=generation_config)
-            return model.generate_content(prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=temperature,
+            ) if system_instruction else types.GenerateContentConfig(temperature=temperature)
+            return client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=config,
+            )
         except Exception as e:
-            err_str = str(e).lower()
-            if any(t in err_str for t in ["429", "quota", "limit", "exhausted"]):
+            err = str(e).lower()
+            if any(t in err for t in ["429", "quota", "limit", "exhausted"]):
                 if attempt == max_retries - 1:
-                    raise e
+                    raise
                 time.sleep(delay)
                 delay *= 2
             else:
-                raise e
+                raise
+
+
+def generate_stream(prompt, system_instruction=None, temperature=0.1):
+    """Generator for streaming output, compatible with st.write_stream."""
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=temperature,
+    ) if system_instruction else types.GenerateContentConfig(temperature=temperature)
+    response = client.models.generate_content_stream(
+        model=MODEL_NAME,
+        contents=prompt,
+        config=config,
+    )
+    for chunk in response:
+        if chunk.text:
+            yield chunk.text
 
 
 # ============================================================
-# Session state (acts as the in-memory index + chat log)
+# Session state
 # ============================================================
 if "index_data" not in st.session_state:
     st.session_state.index_data = {"files": {}, "chunks": []}
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = {}  # keyed by "Brand Model"
+    st.session_state.chat_history = {}
 
 index_data = st.session_state.index_data
+
 
 # ============================================================
 # Chunking + metadata extraction
@@ -259,19 +171,17 @@ def extract_metadata(filepath, first_page_text):
         ---
         {first_page_text[:2000]}
         ---
-        Respond with ONLY a valid JSON object in this format (no markdown blocks, just raw JSON text):
+        Respond with ONLY a valid JSON object (no markdown blocks):
         {{"brand": "BrandName", "model": "ModelName", "version": "VersionInfo"}}
         If you cannot extract the version, return "1.0" as the default version.
         """
-        model_gen = genai.GenerativeModel("models/gemini-flash-latest")
-        response = generate_content_with_retry(model_gen, prompt)
+        response = generate_with_retry(prompt, temperature=0.0)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
         if text.endswith("```"):
             text = text[:-3]
-        text = text.strip()
-        data = json.loads(text)
+        data = json.loads(text.strip())
         brand_extracted = brand if brand != "Unknown" else data.get("brand", "").strip().title()
         model_extracted = model if brand != "Unknown" else data.get("model", "").strip().title()
         version_extracted = data.get("version", "1.0").strip()
@@ -318,7 +228,6 @@ def chunk_pdf(filepath):
 
 def embed_chunks(chunks):
     BATCH = 15
-    TRANSIENT = ("429", "500", "503", "connection", "timeout")
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i:i + BATCH]
         contents = [
@@ -328,13 +237,13 @@ def embed_chunks(chunks):
         ]
         for attempt in range(6):
             try:
-                resp = genai.embed_content(model="models/gemini-embedding-001", content=contents)
-                for j, emb in enumerate(resp["embedding"]):
-                    batch[j]["embedding"] = np.array(emb, dtype=np.float32)
+                resp = client.models.embed_content(model=EMBED_MODEL, contents=contents)
+                for j, emb in enumerate(resp.embeddings):
+                    batch[j]["embedding"] = np.array(emb.values, dtype=np.float32)
                 break
             except Exception as e:
                 err_lower = str(e).lower()
-                if any(t in err_lower for t in TRANSIENT) and attempt < 5:
+                if any(t in err_lower for t in ["429", "500", "503", "connection", "timeout"]) and attempt < 5:
                     time.sleep(5 * (2 ** attempt))
                 else:
                     raise
@@ -345,7 +254,7 @@ def index_pdf(filepath):
     fname = os.path.basename(filepath)
     fhash = hashlib.md5(open(filepath, "rb").read()).hexdigest()
     if fname in index_data["files"] and index_data["files"][fname].get("hash") == fhash:
-        return  # already indexed, unchanged
+        return
     index_data["chunks"] = [c for c in index_data["chunks"] if c.get("source_file") != fname]
     chunks, brand, model, version = chunk_pdf(filepath)
     embed_chunks(chunks)
@@ -357,7 +266,6 @@ def index_pdf(filepath):
 
 def load_samples():
     os.makedirs(BROCHURE_DIR, exist_ok=True)
-    # Download PDFs in background so they exist in library
     for fname in SAMPLE_FILES:
         fpath = f"{BROCHURE_DIR}/{fname}"
         if not os.path.exists(fpath):
@@ -367,7 +275,6 @@ def load_samples():
                     out_file.write(response.read())
             except Exception:
                 pass
-    # Read pre-built chunks index locally from disk (cloned by git)
     try:
         with open("brochure_index.json", "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -388,7 +295,7 @@ def get_car_map():
 
 
 # ============================================================
-# Retrieval + Re-ranking + Generation
+# Retrieval + Re-ranking
 # ============================================================
 def cosine_sim(v1, v2):
     n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
@@ -423,8 +330,7 @@ def rerank_chunks(query, chunks, limit=4):
         of candidate indices as a JSON array of integers, e.g. [2, 0, 1].
         Do NOT explain your reasoning, do NOT output markdown code blocks, respond with ONLY the JSON array.
         """
-        model_gen = genai.GenerativeModel("models/gemini-flash-latest")
-        response = generate_content_with_retry(model_gen, prompt)
+        response = generate_with_retry(prompt, temperature=0.0)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -447,8 +353,8 @@ def retrieve(query, brand, model, limit=4):
                 and c.get("model", "").lower() == model.lower()]
     if not filtered:
         return []
-    emb_resp = genai.embed_content(model="models/gemini-embedding-001", content=query)
-    q_emb = emb_resp["embedding"]
+    emb_resp = client.models.embed_content(model=EMBED_MODEL, contents=query)
+    q_emb = emb_resp.embeddings[0].values
     scored = []
     for c in filtered:
         emb = c.get("embedding")
@@ -462,28 +368,20 @@ def retrieve(query, brand, model, limit=4):
     return rerank_chunks(query, candidates, limit)
 
 
-def generate_answer(query, brand, model):
-    chunks = retrieve(query, brand, model)
-    if not chunks:
-        return f"No brochure data found for '{brand} {model}'.", []
-    context_str = "".join(
+def build_context(chunks):
+    return "".join(
         f"\n--- Source [{i+1}] (Page {c['page']}, Section: {c['section']}, Version: {c.get('version', '1.0')}) ---\n{c['text']}\n"
         for i, c in enumerate(chunks)
     )
-    sys_prompt = (
+
+
+def get_system_prompt(brand, model):
+    return (
         f"You are an expert automotive assistant for Drive Wise. "
         f"Answer ONLY from the brochure excerpts for {brand} {model}. "
         "Rules: 1) Use only the provided context. 2) If missing, say so. "
         "3) Use inline citations [1],[2] matching source numbers. 4) Be clear and concise."
     )
-    prompt = f"Brochure Context for {brand} {model}:\n{context_str}\nUser Query: \"{query}\"\nGrounded Answer:"
-    try:
-        model_gen = genai.GenerativeModel(model_name="models/gemini-flash-latest", system_instruction=sys_prompt)
-        resp = generate_content_with_retry(model_gen, prompt,
-                                            generation_config=genai.types.GenerationConfig(temperature=0.1))
-        return resp.text.strip(), chunks
-    except Exception as e:
-        return f"Error: {e}", []
 
 
 # ============================================================
@@ -526,8 +424,7 @@ def evaluate_answer(query, chunks, answer):
         Respond with ONLY a valid JSON object (no markdown blocks):
         {{"context_relevance": float, "faithfulness": float, "answer_correctness": float, "rationale": "string"}}
         """
-        model_eval = genai.GenerativeModel("models/gemini-flash-latest")
-        response = generate_content_with_retry(model_eval, eval_prompt)
+        response = generate_with_retry(eval_prompt, temperature=0.0)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -556,7 +453,7 @@ def log_to_db(query, brand, model, answer, elapsed, is_failed, faithfulness, rel
 
 
 # ============================================================
-# Sidebar — brochure library management
+# Sidebar
 # ============================================================
 with st.sidebar:
     st.header("🚗 DriveWise")
@@ -564,20 +461,23 @@ with st.sidebar:
     st.divider()
     st.subheader("📚 Brochure Library")
 
-    if st.button("Load Sample Brochures", width="stretch"):
-        with st.spinner("Downloading & indexing sample brochures (~2 min)..."):
+    if st.button("Load Sample Brochures", use_container_width=True):
+        with st.spinner("Downloading & indexing sample brochures..."):
             load_samples()
         st.success("Sample brochures indexed!")
 
     uploaded_files = st.file_uploader("Upload brochure PDF(s)", type="pdf", accept_multiple_files=True)
     if uploaded_files:
         os.makedirs(BROCHURE_DIR, exist_ok=True)
-        with st.spinner("Indexing uploaded brochure(s)..."):
-            for f in uploaded_files:
-                path = os.path.join(BROCHURE_DIR, f.name)
-                with open(path, "wb") as out:
-                    out.write(f.getbuffer())
+        for f in uploaded_files:
+            path = os.path.join(BROCHURE_DIR, f.name)
+            with open(path, "wb") as out:
+                out.write(f.getbuffer())
+            with st.status(f"Indexing {f.name}...", expanded=False) as status:
+                st.write("Extracting text and metadata...")
                 index_pdf(path)
+                st.write("Done.")
+                status.update(label=f"{f.name} indexed", state="complete")
         st.success(f"Indexed {len(uploaded_files)} file(s)!")
 
     st.divider()
@@ -589,16 +489,11 @@ with st.sidebar:
         st.caption("No brochures indexed yet.")
 
 
-
 # ============================================================
-# Main area — Chat + Dashboard tabs
+# Main — Chat + Dashboard
 # ============================================================
-st.markdown("""
-    <div class="header-container">
-        <div class="header-title">Drive Wise</div>
-        <div class="header-subtitle">Metadata-Aware Automotive RAG Assistant — Guided Car Decisions</div>
-    </div>
-""", unsafe_allow_html=True)
+st.title("🚗 Drive Wise")
+st.caption("Metadata-Aware Automotive RAG Assistant")
 
 tab_chat, tab_dashboard = st.tabs(["💬 Chat", "📊 Quality Dashboard"])
 
@@ -607,7 +502,7 @@ with tab_chat:
     brands = sorted(car_map.keys())
 
     if not brands:
-        st.info("No brochures indexed yet. Use the sidebar to load sample brochures or upload your own PDF.")
+        st.info("No brochures indexed yet. Use the sidebar to load samples or upload PDFs.")
     else:
         col1, col2 = st.columns(2)
         brand = col1.selectbox("Brand", brands)
@@ -615,52 +510,77 @@ with tab_chat:
         car_key = f"{brand} {model}"
         st.session_state.chat_history.setdefault(car_key, [])
 
+        # Display history
         for item in st.session_state.chat_history[car_key]:
             with st.chat_message("user"):
                 st.write(item["query"])
             with st.chat_message("assistant"):
                 st.write(item["answer"])
                 if item.get("sources"):
-                    tags = "  ".join(
-                        f"`[{i+1}] Pg {s['page']} · {s['section']} · v{s.get('version', '1.0')}`"
-                        for i, s in enumerate(item["sources"])
-                    )
-                    st.caption("Sources: " + tags)
+                    with st.expander("📎 View Sources"):
+                        for i, s in enumerate(item["sources"]):
+                            st.caption(f"[{i+1}] Page {s['page']} · {s['section']} · v{s.get('version', '1.0')}")
+                            st.text(s["text"][:300] + "..." if len(s["text"]) > 300 else s["text"])
                 if item.get("metrics"):
                     m = item["metrics"]
                     st.caption(
                         f"📊 Faithfulness **{m['faithfulness']:.1f}/5** · "
-                        f"Context Relevance **{m['relevance']:.1f}/5** · "
-                        f"Answer Correctness **{m['correctness']:.1f}/5** · {item['time']}s"
+                        f"Relevance **{m['relevance']:.1f}/5** · "
+                        f"Correctness **{m['correctness']:.1f}/5** · {item['time']}s"
                     )
 
         query = st.chat_input(f"Ask about the {brand} {model}...")
         if query:
             with st.chat_message("user"):
                 st.write(query)
-            with st.chat_message("assistant"):
-                with st.spinner("Retrieving, re-ranking, and generating..."):
-                    t0 = time.time()
-                    answer, sources = generate_answer(query, brand, model)
-                    elapsed = round(time.time() - t0, 2)
-                    is_failed = (not sources) or any(w in answer.lower() for w in ["sorry", "not available", "error"])
-                with st.spinner("Evaluating answer quality..."):
-                    relevance, faithfulness, correctness, rationale = evaluate_answer(query, sources, answer)
-                log_to_db(query, brand, model, answer, elapsed, is_failed,
-                          faithfulness, relevance, correctness, sources)
 
-                st.write(answer)
+            with st.chat_message("assistant"):
+                # Step 1: Retrieval with status container
+                with st.status("Processing your question...", expanded=True) as status:
+                    st.write("🔍 Retrieving relevant brochure chunks...")
+                    t0 = time.time()
+                    chunks = retrieve(query, brand, model)
+
+                    if not chunks:
+                        st.write("❌ No relevant chunks found.")
+                        status.update(label="No data found", state="error", expanded=False)
+                        answer = f"No brochure data found for '{brand} {model}'."
+                        st.write(answer)
+                        sources = []
+                        elapsed = time.time() - t0
+                        relevance = faithfulness = correctness = 1.0
+                    else:
+                        st.write("📄 Building context...")
+                        context_str = build_context(chunks)
+                        sys_prompt = get_system_prompt(brand, model)
+                        prompt = f"Brochure Context for {brand} {model}:\n{context_str}\nUser Query: \"{query}\"\nGrounded Answer:"
+
+                        st.write("✍️ Generating answer...")
+                        answer = st.write_stream(generate_stream(prompt, system_instruction=sys_prompt))
+                        elapsed = round(time.time() - t0, 2)
+
+                        st.write("📊 Evaluating quality...")
+                        relevance, faithfulness, correctness, rationale = evaluate_answer(query, chunks, answer)
+                        sources = chunks
+                        status.update(label=f"Completed in {elapsed}s", state="complete", expanded=False)
+
+                # Display sources and metrics
                 if sources:
-                    tags = "  ".join(
-                        f"`[{i+1}] Pg {s['page']} · {s['section']} · v{s.get('version', '1.0')}`"
-                        for i, s in enumerate(sources)
-                    )
-                    st.caption("Sources: " + tags)
+                    with st.expander("📎 View Sources"):
+                        for i, s in enumerate(sources):
+                            st.caption(f"[{i+1}] Page {s['page']} · {s['section']} · v{s.get('version', '1.0')}")
+                            st.text(s["text"][:300] + "..." if len(s["text"]) > 300 else s["text"])
+
+                is_failed = (not sources) or any(w in answer.lower() for w in ["sorry", "not available", "error"])
                 st.caption(
-                    f"📊 Faithfulness **{faithfulness:.1f}/5** · Context Relevance **{relevance:.1f}/5** · "
-                    f"Answer Correctness **{correctness:.1f}/5** · {elapsed}s"
+                    f"📊 Faithfulness **{faithfulness:.1f}/5** · "
+                    f"Relevance **{relevance:.1f}/5** · "
+                    f"Correctness **{correctness:.1f}/5** · {elapsed}s"
                 )
 
+            # Log and save
+            log_to_db(query, brand, model, answer, elapsed, is_failed,
+                      faithfulness, relevance, correctness, sources)
             st.session_state.chat_history[car_key].append({
                 "query": query, "answer": answer, "sources": sources, "time": elapsed,
                 "metrics": {"relevance": relevance, "faithfulness": faithfulness, "correctness": correctness}
@@ -690,22 +610,35 @@ with tab_dashboard:
             c4.metric("Avg Quality Score", f"{avg_quality:.2f}/5.0")
 
             colA, colB = st.columns(2)
+
             with colA:
                 st.caption("Average RAG Quality (LLM-as-judge)")
                 quality_df = pd.DataFrame({
                     "Metric": ["Faithfulness", "Context Relevance", "Answer Correctness"],
                     "Score": [df["faithfulness"].mean(), df["context_relevance"].mean(), df["answer_correctness"].mean()],
                 })
-                st.bar_chart(quality_df, x="Metric", y="Score")
+                fig1 = px.bar(quality_df, x="Metric", y="Score",
+                              color="Metric",
+                              color_discrete_sequence=["#2563eb", "#059669", "#d97706"],
+                              text_auto=".2f")
+                fig1.update_layout(showlegend=False, yaxis_range=[0, 5.5], height=350)
+                st.plotly_chart(fig1, use_container_width=True)
+
             with colB:
-                st.caption("Query Distribution by Car Model")
-                counts = df.groupby(["brand", "model"]).size().reset_index(name="Queries")
-                counts["Car"] = counts["brand"] + " " + counts["model"]
-                st.bar_chart(counts, x="Car", y="Queries")
+                st.caption("Quality Score Trend Over Time")
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df["quality_avg"] = (df["faithfulness"] + df["context_relevance"] + df["answer_correctness"]) / 3
+                trend = df.sort_values("timestamp").tail(20)
+                fig2 = px.line(trend, x="timestamp", y="quality_avg",
+                               markers=True,
+                               labels={"timestamp": "Time", "quality_avg": "Avg Quality"},
+                               title=None)
+                fig2.update_layout(height=350, yaxis_range=[0, 5.5])
+                st.plotly_chart(fig2, use_container_width=True)
 
             st.caption("Recent log entries")
             st.dataframe(
                 df[["timestamp", "brand", "model", "query", "response_time",
                     "is_failed", "faithfulness", "context_relevance", "answer_correctness"]].tail(10),
-                width="stretch",
+                use_container_width=True,
             )
