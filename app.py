@@ -1,6 +1,6 @@
 """
 DriveWise — Metadata-Aware Automotive RAG Assistant (Streamlit App)
-Demo-safe version: streaming fallback, re-ranking guard, debug sidebar.
+Dark modern theme + demo-safe retrieval/generation.
 """
 
 import os
@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.io as pio
 from google import genai
 from google.genai import types
 from pypdf import PdfReader
@@ -23,6 +24,64 @@ from pypdf import PdfReader
 # Config
 # ============================================================
 st.set_page_config(page_title="DriveWise", page_icon="🚗", layout="wide")
+
+# Plotly dark template so charts blend into the theme
+pio.templates.default = "plotly_dark"
+
+# ============================================================
+# Custom CSS — dark modern theme
+# ============================================================
+st.markdown("""
+<style>
+/* User bubble — indigo tint */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+    border-radius: 18px 18px 4px 18px;
+    padding: 4px 8px;
+    margin: 6px 0;
+}
+/* Assistant bubble — slate with left accent */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    background: #1e293b;
+    border-left: 3px solid #818cf8;
+    border-radius: 4px 18px 18px 18px;
+    padding: 4px 8px;
+    margin: 6px 0;
+}
+/* Metric cards on the dashboard */
+[data-testid="stMetric"] {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 12px 16px;
+}
+/* Expander styling */
+[data-testid="stExpander"] {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+}
+/* Sidebar background */
+[data-testid="stSidebar"] {
+    background: #0b1220;
+    border-right: 1px solid #1e293b;
+}
+/* Primary button */
+.stButton > button {
+    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-weight: 600;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+}
+/* Hide default streamlit branding */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 DB_PATH = "logs/query_logs.db"
 BROCHURE_DIR = "brochures"
@@ -406,7 +465,6 @@ def retrieve(query, brand, model, limit=4, debug=False):
     scored.sort(key=lambda x: x["score"], reverse=True)
     candidates = scored[:limit * 2]
 
-    # Skip re-ranking in demo mode (debug flag or explicit env var)
     skip_rerank = os.environ.get("DRIVEWISE_SKIP_RERANK", "0") == "1"
     if skip_rerank:
         debug_info["rerank_used"] = False
@@ -551,8 +609,20 @@ with st.sidebar:
 # ============================================================
 # Main — Chat + Dashboard
 # ============================================================
-st.title("🚗 Drive Wise")
-st.caption("Metadata-Aware Automotive RAG Assistant")
+st.markdown("""
+<div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e293b 100%);
+            padding: 28px 32px; border-radius: 16px; margin-bottom: 20px;
+            border: 1px solid #334155;">
+  <h1 style="margin: 0; font-size: 2.4rem; font-weight: 800;
+             background: linear-gradient(90deg, #c7d2fe, #818cf8);
+             -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+    🚗 Drive Wise
+  </h1>
+  <p style="margin: 6px 0 0 0; color: #94a3b8; font-size: 1rem;">
+    Metadata-Aware Automotive RAG Assistant
+  </p>
+</div>
+""", unsafe_allow_html=True)
 
 tab_chat, tab_dashboard = st.tabs(["💬 Chat", "📊 Quality Dashboard"])
 
@@ -689,9 +759,11 @@ with tab_dashboard:
                     "Score": [df["faithfulness"].mean(), df["context_relevance"].mean(), df["answer_correctness"].mean()],
                 })
                 fig1 = px.bar(quality_df, x="Metric", y="Score", color="Metric",
-                              color_discrete_sequence=["#2563eb", "#059669", "#d97706"],
+                              color_discrete_sequence=["#818cf8", "#34d399", "#fbbf24"],
                               text_auto=".2f")
-                fig1.update_layout(showlegend=False, yaxis_range=[0, 5.5], height=350)
+                fig1.update_layout(showlegend=False, yaxis_range=[0, 5.5], height=350,
+                                   paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+                                   font_color="#e2e8f0")
                 st.plotly_chart(fig1, use_container_width=True)
             with colB:
                 st.caption("Quality Score Trend Over Time")
@@ -700,7 +772,9 @@ with tab_dashboard:
                 trend = df.sort_values("timestamp").tail(20)
                 fig2 = px.line(trend, x="timestamp", y="quality_avg", markers=True,
                                labels={"timestamp": "Time", "quality_avg": "Avg Quality"})
-                fig2.update_layout(height=350, yaxis_range=[0, 5.5])
+                fig2.update_layout(height=350, yaxis_range=[0, 5.5],
+                                   paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+                                   font_color="#e2e8f0")
                 st.plotly_chart(fig2, use_container_width=True)
 
             st.caption("Recent log entries")
