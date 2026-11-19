@@ -1,6 +1,7 @@
 """
 DriveWise — Metadata-Aware Automotive RAG Assistant (Streamlit App)
 Improved UI: streaming output, status containers, Plotly dashboard.
+Fixed model: gemini-3.5-flash-lite (available for new API keys).
 """
 
 import os
@@ -80,18 +81,18 @@ if not api_key:
     st.stop()
 
 client = genai.Client(api_key=api_key)
-MODEL_NAME = "gemini-2.5-flash"  # Stable model on v1 endpoint
+MODEL_NAME = "gemini-3.5-flash-lite"  # Available for new API keys [citation:1]
 EMBED_MODEL = "models/gemini-embedding-001"
 
 
-def generate_with_retry(prompt, system_instruction=None, temperature=0.1, max_retries=5):
+def generate_with_retry(prompt, system_instruction=None, max_retries=5):
+    """Non-streaming generation with retry on rate limits."""
     delay = 10
     for attempt in range(max_retries):
         try:
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                temperature=temperature,
-            ) if system_instruction else types.GenerateContentConfig(temperature=temperature)
+            ) if system_instruction else None
             return client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
@@ -108,12 +109,11 @@ def generate_with_retry(prompt, system_instruction=None, temperature=0.1, max_re
                 raise
 
 
-def generate_stream(prompt, system_instruction=None, temperature=0.1):
+def generate_stream(prompt, system_instruction=None):
     """Generator for streaming output, compatible with st.write_stream."""
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=temperature,
-    ) if system_instruction else types.GenerateContentConfig(temperature=temperature)
+    ) if system_instruction else None
     response = client.models.generate_content_stream(
         model=MODEL_NAME,
         contents=prompt,
@@ -175,7 +175,7 @@ def extract_metadata(filepath, first_page_text):
         {{"brand": "BrandName", "model": "ModelName", "version": "VersionInfo"}}
         If you cannot extract the version, return "1.0" as the default version.
         """
-        response = generate_with_retry(prompt, temperature=0.0)
+        response = generate_with_retry(prompt)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -330,7 +330,7 @@ def rerank_chunks(query, chunks, limit=4):
         of candidate indices as a JSON array of integers, e.g. [2, 0, 1].
         Do NOT explain your reasoning, do NOT output markdown code blocks, respond with ONLY the JSON array.
         """
-        response = generate_with_retry(prompt, temperature=0.0)
+        response = generate_with_retry(prompt)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -424,7 +424,7 @@ def evaluate_answer(query, chunks, answer):
         Respond with ONLY a valid JSON object (no markdown blocks):
         {{"context_relevance": float, "faithfulness": float, "answer_correctness": float, "rationale": "string"}}
         """
-        response = generate_with_retry(eval_prompt, temperature=0.0)
+        response = generate_with_retry(eval_prompt)
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:]
